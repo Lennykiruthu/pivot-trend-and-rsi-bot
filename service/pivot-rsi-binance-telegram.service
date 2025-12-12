@@ -1,0 +1,13 @@
+[Unit]
+Description=Pivot RSI Binance Telegram Bot
+
+[Service]
+Type=simple
+WorkingDirectory = %h/pivot-trend-and-rsi-bot
+ExecStart=%h/pivot-trend-and-rsi-bot/venv/bin/python3 %h/pivot-trend-and-rsi-bot/binance_bot.py
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
