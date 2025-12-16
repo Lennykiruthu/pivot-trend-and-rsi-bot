@@ -40,7 +40,7 @@ indicator = PivotRSIIndicator(
 
 # Configure timeframes with their respective asset counts
 TIMEFRAME_CONFIG = {
-    "1h": {"top": 20, "bottom": 20},
+    "1h": {"top": 40, "bottom": 20},
     "1d": {"top": 50, "bottom": 50}
 }
 
