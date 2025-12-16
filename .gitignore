@@ -75,5 +75,5 @@ dmypy.json
 *.log
 
 # Local config
-*.env
+*.env*
 .envrc
