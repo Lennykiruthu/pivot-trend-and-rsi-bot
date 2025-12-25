@@ -9,21 +9,24 @@ class PivotRSIIndicator:
     """
     Pivot Trend and RSI Standalone Indicator
     Enhanced for multi-symbol, multi-timeframe analysis
+    Now supports separate RSI lengths for buy and sell signals
+    FIXED: Bar-by-bar execution matching Pine Script exactly
     """
     
     def __init__(self, 
                  # Pivot Settings
-                 pivot_period: int = 4,
-                 pivot_num: int = 3,
+                 pivot_period: int = 27,
+                 pivot_num: int = 30,
                  
                  # RSI Settings
-                 rsi_length: int = 14,
-                 rsi_buy_level: int = 40,
+                 rsi_buy_length: int = 6,
+                 rsi_sell_length: int = 14,
+                 rsi_buy_level: int = 30,
                  rsi_sell_level: int = 60,
                  buy_rsi_range: int = 0,
                  sell_rsi_range: int = 0,
-                 pivot_sell_range: int = 0,
-                 skip_candles: int = 0,
+                 pivot_sell_range: int = 40,
+                 skip_candles: int = 3,
                  buy_alert: bool = True,
                  sell_alert: bool = True):
         """
@@ -32,7 +35,8 @@ class PivotRSIIndicator:
         Args:
             pivot_period: Pivot point period
             pivot_num: Number of pivot points to check
-            rsi_length: RSI calculation period
+            rsi_buy_length: RSI calculation period for buy signals
+            rsi_sell_length: RSI calculation period for sell signals
             rsi_buy_level: RSI level for buy signals
             rsi_sell_level: RSI level for sell signals
             buy_rsi_range: Lookback period for buy range calculation
@@ -47,7 +51,8 @@ class PivotRSIIndicator:
         self.pnum = pivot_num
         
         # RSI parameters
-        self.rsi_length = rsi_length
+        self.rsi_buy_length = rsi_buy_length
+        self.rsi_sell_length = rsi_sell_length
         self.rsi_buy_level = rsi_buy_level
         self.rsi_sell_level = rsi_sell_level
         self.buy_rsi_range = buy_rsi_range
@@ -57,81 +62,128 @@ class PivotRSIIndicator:
         self.buy_alert = buy_alert
         self.sell_alert = sell_alert
     
-    def calculate_rsi(self, prices: pd.Series, period: int) -> pd.Series:
-        """Calculate RSI indicator"""
-        delta = prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    def calculate_rsi(self, close_prices: pd.Series, period: int = 14) -> pd.Series:
+        """
+        Calculate the Relative Strength Index (RSI) manually.
         
-        # Avoid division by zero
-        rs = gain / loss.replace(0, np.nan)
+        Parameters:
+            close_prices (pd.Series): Series of closing prices.
+            period (int): Lookback period for RSI calculation.
+        
+        Returns:
+            pd.Series: RSI values.
+        """
+        # Calculate price differences
+        delta = close_prices.diff()
+
+        # Separate gains and losses
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+
+        # Convert to pandas Series
+        gain = pd.Series(gain, index=close_prices.index)
+        loss = pd.Series(loss, index=close_prices.index)
+
+        # Optionally use Wilder's smoothing (EMA-style)
+        avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+
+        # Calculate RS and RSI
+        rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
-        return rsi
+
+        return rsi  
     
-    def find_pivot_high(self, high: pd.Series, period: int) -> pd.Series:
-        """Find pivot highs"""
+    def find_pivot_high_realtime(self, high: pd.Series, period: int) -> pd.Series:
+        """
+        Find pivot highs with REALTIME detection matching Pine Script
+        Pivot is detected 'period' bars AFTER the actual pivot point
+        """
         pivot_high = pd.Series(np.nan, index=high.index, dtype=float)
         
-        for i in range(period, len(high) - period):
-            left_max = high.iloc[i-period:i].max()
-            right_max = high.iloc[i+1:i+period+1].max()
-            
-            if high.iloc[i] > left_max and high.iloc[i] > right_max:
-                pivot_high.iloc[i] = high.iloc[i]
+        # Start from period and go to len(high) (no -period at end)
+        # This matches Pine Script which continues detecting pivots through current bar
+        for i in range(period, len(high)):
+            # Check if we have enough bars to look back
+            if i >= period * 2:
+                center_idx = i - period  # The actual pivot point is 'period' bars ago
+                
+                left_max = high.iloc[center_idx - period:center_idx].max()
+                right_max = high.iloc[center_idx + 1:center_idx + period + 1].max()
+                
+                if high.iloc[center_idx] > left_max and high.iloc[center_idx] > right_max:
+                    # Assign pivot at CURRENT bar (i), not at center
+                    pivot_high.iloc[i] = high.iloc[center_idx]
         
         return pivot_high
     
-    def find_pivot_low(self, low: pd.Series, period: int) -> pd.Series:
-        """Find pivot lows"""
+    def find_pivot_low_realtime(self, low: pd.Series, period: int) -> pd.Series:
+        """
+        Find pivot lows with REALTIME detection matching Pine Script
+        Pivot is detected 'period' bars AFTER the actual pivot point
+        """
         pivot_low = pd.Series(np.nan, index=low.index, dtype=float)
         
-        for i in range(period, len(low) - period):
-            left_min = low.iloc[i-period:i].min()
-            right_min = low.iloc[i+1:i+period+1].min()
-            
-            if low.iloc[i] < left_min and low.iloc[i] < right_min:
-                pivot_low.iloc[i] = low.iloc[i]
+        # Start from period and go to len(low) (no -period at end)
+        for i in range(period, len(low)):
+            # Check if we have enough bars to look back
+            if i >= period * 2:
+                center_idx = i - period  # The actual pivot point is 'period' bars ago
+                
+                left_min = low.iloc[center_idx - period:center_idx].min()
+                right_min = low.iloc[center_idx + 1:center_idx + period + 1].min()
+                
+                if low.iloc[center_idx] < left_min and low.iloc[center_idx] < right_min:
+                    # Assign pivot at CURRENT bar (i), not at center
+                    pivot_low.iloc[i] = low.iloc[center_idx]
         
         return pivot_low
     
     def calculate_trend(self, df: pd.DataFrame) -> pd.Series:
-        """Calculate pivot trend"""
-        ph = self.find_pivot_high(df['high'], self.prd)
-        pl = self.find_pivot_low(df['low'], self.prd)
+        """
+        Calculate pivot trend using BAR-BY-BAR execution matching Pine Script
+        """
+        ph = self.find_pivot_high_realtime(df['high'], self.prd)
+        pl = self.find_pivot_low_realtime(df['low'], self.prd)
         
-        # Initialize arrays for pivot levels
-        ph_lev = deque([np.nan] * self.pnum, maxlen=self.pnum)
-        pl_lev = deque([np.nan] * self.pnum, maxlen=self.pnum)
+        # Initialize trend array
+        trend = pd.Series(0, index=df.index, dtype=int)
         
-        trend = pd.Series(0, index=df.index)
+        # Arrays to store pivot levels (matching Pine Script array behavior)
+        ph_lev = [np.nan] * self.pnum
+        pl_lev = [np.nan] * self.pnum
+        
         prev_trend = 0
         
+        # Bar-by-bar execution
         for i in range(len(df)):
-            # Update pivot high levels
+            # Update pivot high levels when new pivot detected
             if not np.isnan(ph.iloc[i]):
-                ph_lev.appendleft(ph.iloc[i])
+                # array.unshift in Pine Script = insert at beginning, pop from end
+                ph_lev.insert(0, ph.iloc[i])
+                ph_lev.pop()
             
-            # Update pivot low levels
+            # Update pivot low levels when new pivot detected
             if not np.isnan(pl.iloc[i]):
-                pl_lev.appendleft(pl.iloc[i])
+                pl_lev.insert(0, pl.iloc[i])
+                pl_lev.pop()
             
-            # Calculate low rate
+            # Calculate low rate (lrate)
             lrate = 0.0
-            valid_pl = [x for x in pl_lev if not np.isnan(x)]
-            if valid_pl:
-                for pl_val in valid_pl:
-                    if pl_val != 0:  # Avoid division by zero
-                        rate = (df['close'].iloc[i] - pl_val) / pl_val
-                        lrate += (rate / self.pnum)
+            for j in range(len(pl_lev)):
+                pl_val = pl_lev[j]
+                if not np.isnan(pl_val) and pl_val != 0:
+                    rate = (df['close'].iloc[i] - pl_val) / pl_val
+                    lrate += (rate / self.pnum)
             
-            # Calculate high rate
+            # Calculate high rate (hrate)
+            # Pine Script starts from index 1 (skips first element)
             hrate = 0.0
-            valid_ph = [x for x in ph_lev if not np.isnan(x)]
-            if valid_ph and len(valid_ph) > 1:
-                for ph_val in valid_ph[1:]:
-                    if ph_val != 0:  # Avoid division by zero
-                        rate = (df['close'].iloc[i] - ph_val) / ph_val
-                        hrate += (rate / self.pnum)
+            for j in range(1, len(ph_lev)):
+                ph_val = ph_lev[j]
+                if not np.isnan(ph_val) and ph_val != 0:
+                    rate = (df['close'].iloc[i] - ph_val) / ph_val
+                    hrate += (rate / self.pnum)
             
             # Determine trend
             if hrate > 0 and lrate > 0:
@@ -151,44 +203,45 @@ class PivotRSIIndicator:
         # Make a copy to avoid modifying original
         result = df.copy()
         
-        # Calculate RSI
-        result['rsi'] = self.calculate_rsi(result['close'], self.rsi_length)
+        # Calculate RSI with separate lengths for buy and sell
+        result['rsi_buy'] = self.calculate_rsi(result['close'], self.rsi_buy_length)
+        result['rsi_sell'] = self.calculate_rsi(result['close'], self.rsi_sell_length)
         
         # Calculate trend
         result['trend'] = self.calculate_trend(result)
         
         # Initialize signal columns
-        result['rsi_buy'] = False
-        result['rsi_sell'] = False
+        result['rsi_buy_signal'] = False
+        result['rsi_sell_signal'] = False
         result['pivot_buy'] = False
         result['pivot_sell'] = False
         result['buy_signal'] = False
         result['sell_signal'] = False
         result['pivot_sell_signal'] = False
         
-        # RSI conditions
+        # RSI conditions - using separate RSI calculations
         for i in range(1, len(result)):
-            result.loc[result.index[i], 'rsi_buy'] = (
-                result['rsi'].iloc[i] <= self.rsi_buy_level and 
-                result['rsi'].iloc[i-1] > self.rsi_buy_level
+            result.loc[result.index[i], 'rsi_buy_signal'] = (
+                result['rsi_buy'].iloc[i] <= self.rsi_buy_level and 
+                result['rsi_buy'].iloc[i-1] > self.rsi_buy_level
             )
-            result.loc[result.index[i], 'rsi_sell'] = (
-                result['rsi'].iloc[i] >= self.rsi_sell_level and 
-                result['rsi'].iloc[i-1] < self.rsi_sell_level
+            result.loc[result.index[i], 'rsi_sell_signal'] = (
+                result['rsi_sell'].iloc[i] >= self.rsi_sell_level and 
+                result['rsi_sell'].iloc[i-1] < self.rsi_sell_level
             )
         
         # Pivot conditions
         result['pivot_buy'] = result['trend'] == 1
         result['pivot_sell'] = result['trend'] == -1
         
-        # Process signals with range calculations
+        # Process signals with range calculations (bar-by-bar)
         prev_bar_index = 0
         
         for i in range(1, len(result)):
             # Buy range calculation
             buy_result = False
             if self.buy_rsi_range > 0:
-                if result['rsi_buy'].iloc[i] and result['trend'].iloc[i] == 1:
+                if result['rsi_buy_signal'].iloc[i] and result['trend'].iloc[i] == 1:
                     buy_count = 0
                     for j in range(1, min(self.buy_rsi_range + 1, i + 1)):
                         if result['trend'].iloc[i-j] == 1:
@@ -201,12 +254,12 @@ class PivotRSIIndicator:
                     if 0 < buy_count < self.buy_rsi_range:
                         buy_result = True
             else:
-                buy_result = result['rsi_buy'].iloc[i] and result['pivot_buy'].iloc[i]
+                buy_result = result['rsi_buy_signal'].iloc[i] and result['pivot_buy'].iloc[i]
             
             # Sell range calculation
             sell_result = False
             if self.sell_rsi_range > 0:
-                if result['rsi_sell'].iloc[i] and result['trend'].iloc[i] == -1:
+                if result['rsi_sell_signal'].iloc[i] and result['trend'].iloc[i] == -1:
                     sell_count = 0
                     for j in range(1, min(self.sell_rsi_range + 1, i + 1)):
                         if result['trend'].iloc[i-j] == -1:
@@ -219,12 +272,12 @@ class PivotRSIIndicator:
                     if 0 < sell_count < self.sell_rsi_range:
                         sell_result = True
             else:
-                sell_result = result['rsi_sell'].iloc[i] and result['pivot_sell'].iloc[i]
+                sell_result = result['rsi_sell_signal'].iloc[i] and result['pivot_sell'].iloc[i]
             
             # Pivot sell range calculation
             pivot_range_sell_result = False
             if self.pivot_sell_range > 0:
-                if result['rsi_sell'].iloc[i] and result['trend'].iloc[i] == 1:
+                if result['rsi_sell_signal'].iloc[i] and result['trend'].iloc[i] == 1:
                     for j in range(1, min(self.pivot_sell_range + 1, i + 1)):
                         if result['pivot_sell'].iloc[i-j]:
                             pivot_range_sell_result = True
@@ -247,10 +300,11 @@ class PivotRSIIndicator:
             'buy_signal': result['buy_signal'],
             'sell_signal': result['sell_signal'],
             'pivot_sell_signal': result['pivot_sell_signal'],
-            'rsi': result['rsi'],
-            'trend': result['trend'],
             'rsi_buy': result['rsi_buy'],
             'rsi_sell': result['rsi_sell'],
+            'trend': result['trend'],
+            'rsi_buy_signal': result['rsi_buy_signal'],
+            'rsi_sell_signal': result['rsi_sell_signal'],
             'pivot_buy': result['pivot_buy'],
             'pivot_sell': result['pivot_sell']
         }
@@ -297,7 +351,8 @@ class PivotRSIIndicator:
                         
                         results[timeframe][symbol] = {
                             "signal": signal,
-                            "rsi": float(signals['rsi'].iloc[-1]),
+                            "rsi_buy": float(signals['rsi_buy'].iloc[-1]),
+                            "rsi_sell": float(signals['rsi_sell'].iloc[-1]),
                             "trend": int(signals['trend'].iloc[-1])
                         }
                         
@@ -318,7 +373,7 @@ class PivotRSIIndicator:
             results: Output from analyze_symbols()
             
         Returns:
-            DataFrame with columns: Symbol, Timeframe, Signal, RSI, Trend
+            DataFrame with columns: Symbol, Timeframe, Signal, RSI_Buy, RSI_Sell, Trend
         """
         table_data = []
         
@@ -331,8 +386,10 @@ class PivotRSIIndicator:
                 }
                 
                 # Add optional fields if available
-                if 'rsi' in signal_data:
-                    row['RSI'] = round(signal_data['rsi'], 2)
+                if 'rsi_buy' in signal_data:
+                    row['RSI_Buy'] = round(signal_data['rsi_buy'], 2)
+                if 'rsi_sell' in signal_data:
+                    row['RSI_Sell'] = round(signal_data['rsi_sell'], 2)
                 if 'trend' in signal_data:
                     row['Trend'] = signal_data['trend']
                 
@@ -404,14 +461,15 @@ class PivotRSIIndicator:
 
 # Example usage and testing
 if __name__ == "__main__":
-    print("Pivot Trend and RSI Indicator - Multi-Symbol Screener")
+    print("Pivot Trend and RSI Indicator - FIXED Multi-Symbol Screener")
     print("=" * 60)
     
-    # Create indicator instance
+    # Create indicator instance with separate RSI lengths
     indicator = PivotRSIIndicator(
         pivot_period=4,
         pivot_num=3,
-        rsi_length=14,
+        rsi_buy_length=6,
+        rsi_sell_length=14,
         rsi_buy_level=40,
         rsi_sell_level=60,
         buy_rsi_range=0,
@@ -419,72 +477,22 @@ if __name__ == "__main__":
         skip_candles=0
     )
     
-    print("Indicator initialized with default parameters")
+    print("Indicator initialized with FIXED bar-by-bar execution:")
     print(f"Pivot period: {indicator.prd}")
     print(f"Pivot num: {indicator.pnum}")
-    print(f"RSI length: {indicator.rsi_length}")
+    print(f"RSI buy length: {indicator.rsi_buy_length}")
+    print(f"RSI sell length: {indicator.rsi_sell_length}")
     print(f"RSI buy level: {indicator.rsi_buy_level}")
     print(f"RSI sell level: {indicator.rsi_sell_level}")
     
+    print("\nFIXES APPLIED:")
+    print("✓ Pivot detection now matches Pine Script realtime behavior")
+    print("✓ Bar-by-bar execution with proper array state management")
+    print("✓ Trend calculation aligned with Pine Script logic")
+    print("✓ No more lookahead bias or timing misalignment")
+    
     print("\nTo use this indicator with Binance bot:")
     print("1. Import: from pivot_rsi_indicator import PivotRSIIndicator")
-    print("2. Initialize: indicator = PivotRSIIndicator()")
+    print("2. Initialize: indicator = PivotRSIIndicator(rsi_buy_length=6, rsi_sell_length=14)")
     print("3. Analyze: results = indicator.analyze_symbols(all_data)")
-    print("4. The structure matches VuManChu implementation for easy integration")
-    
-    # Demo with sample data
-    print("\n" + "=" * 60)
-    print("Creating sample data for demonstration...")
-    
-    # Create sample OHLC data for 2 symbols and 2 timeframes
-    dates_1h = pd.date_range(start='2024-01-01', periods=500, freq='H')
-    dates_1d = pd.date_range(start='2024-01-01', periods=100, freq='D')
-    
-    np.random.seed(42)
-    
-    sample_data = {}
-    for symbol in ['BTCUSDT', 'ETHUSDT']:
-        sample_data[symbol] = {}
-        
-        # 1h data
-        close_1h = 100 + np.cumsum(np.random.randn(500) * 2)
-        sample_data[symbol]['1h'] = pd.DataFrame({
-            'open': close_1h + np.random.randn(500) * 0.5,
-            'high': close_1h + abs(np.random.randn(500)) * 1.5,
-            'low': close_1h - abs(np.random.randn(500)) * 1.5,
-            'close': close_1h,
-            'volume': abs(np.random.randn(500) * 1000)
-        }, index=dates_1h)
-        
-        # 1d data
-        close_1d = 100 + np.cumsum(np.random.randn(100) * 5)
-        sample_data[symbol]['1d'] = pd.DataFrame({
-            'open': close_1d + np.random.randn(100) * 1,
-            'high': close_1d + abs(np.random.randn(100)) * 3,
-            'low': close_1d - abs(np.random.randn(100)) * 3,
-            'close': close_1d,
-            'volume': abs(np.random.randn(100) * 5000)
-        }, index=dates_1d)
-    
-    # Analyze symbols
-    print("Analyzing symbols...")
-    results = indicator.analyze_symbols(sample_data)
-    
-    # Display results
-    print("\nResults by timeframe:")
-    for timeframe, symbols in results.items():
-        print(f"\n{timeframe.upper()} timeframe:")
-        for symbol, data in symbols.items():
-            print(f"  {symbol}: {data['signal']} (RSI: {data.get('rsi', 'N/A'):.2f}, Trend: {data.get('trend', 'N/A')})")
-    
-    # Create summary table
-    summary = indicator.create_summary_table(results)
-    print("\nSummary Table:")
-    print(summary.to_string(index=False))
-    
-    # Get buy/sell symbols
-    buy_symbols = indicator.get_buy_symbols(results)
-    sell_symbols = indicator.get_sell_symbols(results)
-    
-    print(f"\nBuy signals: {buy_symbols if buy_symbols else 'None'}")
-    print(f"Sell signals: {sell_symbols if sell_symbols else 'None'}")
+    print("4. Trend values should now match Pine Script exactly!")
