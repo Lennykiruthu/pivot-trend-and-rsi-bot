@@ -270,7 +270,7 @@ def main():
         print(f"Indicator Settings:")
         print(f"  - Pivot Period: {indicator.prd}")
         print(f"  - Pivot Num: {indicator.pnum}")
-        print(f"  - RSI Length: {indicator.rsi_length}")
+        print(f"  - RSI Length: {indicator.rsi_buy_length}")
         print(f"  - RSI Buy Level: {indicator.rsi_buy_level}")
         print(f"  - RSI Sell Level: {indicator.rsi_sell_level}")
         print(f"Timeframes: {list(TIMEFRAME_CONFIG.keys())}")
