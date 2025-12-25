@@ -27,14 +27,15 @@ client = Client(API_KEY, API_SECRET)
 indicator = PivotRSIIndicator(
     pivot_period=27,
     pivot_num=30,
-    rsi_length=14,
-    rsi_buy_level=10,
-    rsi_sell_level=80,
+    rsi_buy_length=6,    
+    rsi_sell_length=14,
+    rsi_buy_level=30,
+    rsi_sell_level=60,
     buy_rsi_range=0,
     sell_rsi_range=0,
-    pivot_sell_range=35,
-    skip_candles=5,
-    buy_alert=False,
+    pivot_sell_range=40,
+    skip_candles=3,
+    buy_alert=True,
     sell_alert=True
 )
 
