@@ -30,7 +30,7 @@ indicator = PivotRSIIndicator(
     rsi_buy_length=6,    
     rsi_sell_length=14,
     rsi_buy_level=30,
-    rsi_sell_level=60,
+    rsi_sell_level=80,
     buy_rsi_range=0,
     sell_rsi_range=0,
     pivot_sell_range=40,
@@ -165,9 +165,37 @@ async def fetch_and_alerts(app, sleep_seconds=60):
             print(f"{below_limit_count} assets have less than {limit} rows")            
 
             # 3️⃣ Analyze signals with Pivot RSI Indicator
-            print("\nParsing all symbols data through Pivot RSI analysis...")
+            print("\nParsing symbols data through Pivot RSI analysis...")
             start_analysis = time.perf_counter()
-            results = indicator.analyze_symbols(all_data)
+
+            # Separate top gainers and bottom losers for analysis
+            results = {}
+            for timeframe, config in TIMEFRAME_CONFIG.items():
+                timeframe_tickers = app.bot_data["all_tickers_by_timeframe"][timeframe]
+                
+                # Get symbols for top gainers and bottom losers
+                top_symbols = [t['symbol'] for t in timeframe_tickers['top']]
+                bottom_symbols = [t['symbol'] for t in timeframe_tickers['bottom']]
+                
+                # Create separate data dictionaries
+                top_data = {sym: all_data[sym] for sym in top_symbols if sym in all_data}
+                bottom_data = {sym: all_data[sym] for sym in bottom_symbols if sym in all_data}
+                
+                # Analyze with appropriate RSI settings
+                print(f"  {timeframe}: Analyzing {len(top_symbols)} gainers (RSI Sell={indicator.rsi_sell_length})")
+                top_results = indicator.analyze_symbols(top_data, asset_type='gainers')
+                
+                print(f"  {timeframe}: Analyzing {len(bottom_symbols)} losers (RSI Buy={indicator.rsi_buy_length})")
+                bottom_results = indicator.analyze_symbols(bottom_data, asset_type='losers')
+                
+                # Merge results
+                if timeframe not in results:
+                    results[timeframe] = {}
+                
+                if timeframe in top_results:
+                    results[timeframe].update(top_results[timeframe])
+                if timeframe in bottom_results:
+                    results[timeframe].update(bottom_results[timeframe])
 
             # 4️⃣ Send alerts
             if results:

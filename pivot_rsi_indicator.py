@@ -309,23 +309,21 @@ class PivotRSIIndicator:
             'pivot_sell': result['pivot_sell']
         }
     
-    def analyze_symbols(self, symbol_data: Dict[str, Dict[str, pd.DataFrame]]) -> Dict[str, Dict[str, Dict[str, str]]]:
+    def analyze_symbols(self, symbol_data: Dict[str, Dict[str, pd.DataFrame]], 
+                        asset_type: str = 'both') -> Dict[str, Dict[str, Dict[str, str]]]:
         """
         Analyze multiple symbols across multiple timeframes and return buy/sell signals
         
         Args:
             symbol_data: Dictionary with structure {symbol: {timeframe: DataFrame}}
-                        where DataFrame has columns: open, high, low, close, volume
+            asset_type: 'gainers' (use sell RSI), 'losers' (use buy RSI), or 'both'
         
         Returns:
             Dictionary with structure {timeframe: {symbol: {signal: str}}}
         """
-        # Define timeframes to analyze
         TIMEFRAMES = ["1h", "1d"]
-        
         results = {}
 
-        # Loop through each timeframe
         for timeframe in TIMEFRAMES:
             results[timeframe] = {}
         
@@ -337,7 +335,17 @@ class PivotRSIIndicator:
                         # Generate signals for this symbol
                         signals = self.generate_signals(data)
                         
-                        # Determine final signal based on latest bar
+                        # Determine which RSI to use based on asset type
+                        if asset_type == 'gainers':
+                            # Top gainers: focus on sell signals with RSI sell
+                            rsi_value = signals['rsi_sell'].iloc[-1]
+                        elif asset_type == 'losers':
+                            # Bottom losers: focus on buy signals with RSI buy
+                            rsi_value = signals['rsi_buy'].iloc[-1]
+                        else:
+                            # Default: use both
+                            rsi_value = signals['rsi_buy'].iloc[-1]
+                        
                         latest_buy = signals['buy_signal'].iloc[-1]
                         latest_sell = signals['sell_signal'].iloc[-1]
                         latest_pivot_sell = signals['pivot_sell_signal'].iloc[-1]
@@ -351,6 +359,7 @@ class PivotRSIIndicator:
                         
                         results[timeframe][symbol] = {
                             "signal": signal,
+                            "rsi": rsi_value,  # Single RSI based on asset type
                             "rsi_buy": float(signals['rsi_buy'].iloc[-1]),
                             "rsi_sell": float(signals['rsi_sell'].iloc[-1]),
                             "trend": int(signals['trend'].iloc[-1])
